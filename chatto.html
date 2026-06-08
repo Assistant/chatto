@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>chat</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: scroll !important;
+        }
+
+        body::-webkit-scrollbar {
+            display: none;
+        }
+
+        #main {
+            background-color: transparent;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            font-style: normal;
+            font-variant: normal;
+            font-weight: normal;
+            position: absolute;
+            color: #D3D3D3;
+            border-radius: 4px;
+        }
+
+        .username {
+            font-weight: bold;
+        }
+
+        .badge {
+            vertical-align: bottom;
+            height: 18px;
+            width: 18px;
+            padding: 0;
+            margin-right: 3px;
+            margin-bottom: -1px;
+            border-radius: 2px;
+            -moz-border-radius: 2px;
+            -webkit-border-radius: 2px;
+        }
+
+        .chat_message {
+            margin-left: 3px;
+            margin-right: 3px;
+            padding-top: 2px;
+            padding-bottom: 3px;
+            line-height: 16px;
+            overflow-wrap: anywhere;
+        }
+
+        .message {
+            display: inline;
+        }
+
+        .emote {
+            margin-bottom: -7px;
+        }
+
+        .emote-group {
+            position: relative;
+            display: inline-block;
+            width: 32px;
+            height: 32px;
+            margin: 0;
+        }
+
+        .emote.zero:not(:first-child) {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            right: 0;
+        }
+
+        [data-state="exiting"] {
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .token_message,
+        .error_message {
+            text-align: center;
+            margin: 2rem;
+        }
+
+        h1 {
+            font-size: 1.25rem;
+            font-weight: normal;
+        }
+
+        .token_message .code {
+            font-family: monospace;
+            font-weight: bold;
+            padding: 0.2em 0.5em;
+            border: 1px solid currentColor;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="main"></div>
+    <script>
+        const client_id = 'd7csqmy2vvau5p3grgd5eb1ao0fbxa'
+        const params = new URLSearchParams(window.location.search)
+        const message_ttl = Number(params.get('timeout')) * 1000
+        const emotes_7tv = new Map()
+        const zero_width = []
+        const all_badges = new Map()
+        const main = document.getElementById('main')
+        const colors = [
+            '#FF0000', '#0000FF', '#008000', '#B22222', '#FF7F50',
+            '#9ACD32', '#FF4500', '#2E8B57', '#DAA520', '#D2691E',
+            '#5F9EA0', '#1E90FF', '#FF69B4', '#8A2BE2', '#00FF7F',
+        ].map(v => ({v, s: Math.random()})).sort((a, b) => a.s - b.s).map(({v}) => v)
+        const observer = new IntersectionObserver((entries, _) =>
+            entries.forEach(e => {if (!e.isIntersecting) e.target.remove()}))
+
+        let sse
+
+        main.addEventListener('load', () => window.scroll(0, main.scrollHeight), true)
+
+        const validate_token = async access_token => {
+            const token = await (await fetch('https://id.twitch.tv/oauth2/validate', {
+                headers: {'Authorization': `OAuth ${access_token}`}
+            })).json()
+
+            if ('user_id' in token && 'login' in token) {
+                const {user_id, login} = token
+                return {access_token, user_id, login}
+            } else {
+                console.warn('Failed to validate token: ', token)
+            }
+        }
+
+        const refresh = async refresh_token => {
+            const token = await (await fetch('https://id.twitch.tv/oauth2/token', {
+                method: 'POST',
+                body: new URLSearchParams({
+                    grant_type: 'refresh_token',
+                    refresh_token, client_id
+                })
+            })).json()
+
+            if ('access_token' in token && 'refresh_token' in token) {
+                localStorage.access_token = token.access_token
+                localStorage.refresh_token = token.refresh_token
+                const {access_token, refresh_token} = token
+                return {access_token, refresh_token}
+            } else {
+                console.warn('Failed to refresh token: ', token)
+            }
+        }
+
+        const request_token = async () => {
+            const code = await (await fetch('https://id.twitch.tv/oauth2/device', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `client_id=${client_id}&scopes=`
+            })).json()
+
+            if (!'device_code' in code || !'user_code' in code) {
+                console.error('Failed to request token: ', code)
+                main.innerHTML = `
+                    <div class="error_message">
+                        <h1>Something went wrong, probably on Twitch's end.</h1>
+                    </div>
+                `
+                return
+            }
+
+            main.innerHTML = `
+                <div class="token_message">
+                    <h1>Open <a href="${code.verification_uri}" target="_blank">https://twitch.tv/activate</a> on a browser and enter the code: <span class="code">${code.user_code}</span></h1>
+                </div>
+            `
+
+            while (true) {
+                await new Promise(r => setTimeout(r, 5000))
+                let token = await (await fetch('https://id.twitch.tv/oauth2/token', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: `client_id=${client_id}&scopes=&device_code=${code.device_code}&grant_type=urn:ietf:params:oauth:grant-type:device_code`
+                })).json()
+
+                if ('access_token' in token && 'refresh_token' in token) {
+                    localStorage.access_token = token.access_token
+                    localStorage.refresh_token = token.refresh_token
+                    const validated = validate_token(localStorage.access_token)
+                    if (validated) {
+                        main.innerHTML = ''
+                        return validated
+                    }
+                }
+
+                if ('message' in token && token.message == 'invalid device code') {
+                    main.innerHTML = `
+                        <div class="error_message">
+                            <h1>Error getting token, code might have expired. Please refresh the page.</h1>
+                        </div>
+                    `
+                    return
+                }
+            }
+        }
+
+        const get_token = async () => {
+            if (localStorage.access_token) {
+                const token = await validate_token(localStorage.access_token)
+                if (token) return token
+
+                if (await refresh(localStorage.refresh_token)) {
+                    const validated_token = await validate_token(localStorage.access_token)
+                    if (validated_token) return validated_token
+                }
+            }
+            return await request_token()
+        }
+
+        const insert_message = el => {
+            main.append(el)
+            requestAnimationFrame(() => el.dataset.state = 'entered')
+            if (message_ttl > 0) {
+                setTimeout(() => {
+                    el.dataset.state = 'exiting'
+                    el.addEventListener('transitionend', () => el.remove(), {once: true})
+                    el.addEventListener('animationend', () => el.remove(), {once: true})
+                    const style = getComputedStyle(el)
+                    if ([style.transitionDuration, style.animationDuration]
+                        .flatMap(x => x.split(','))
+                        .every(x => x.trim() == '0s')) el.remove()
+                }, message_ttl)
+            }
+            window.scroll(0, main.scrollHeight)
+            observer.observe(el)
+        }
+
+        const add_7tv_emote = emote => {
+            emotes_7tv.set(emote.name, emote.id)
+            if ((emote.data.flags & 256) != 0) zero_width.push(emote.id)
+        }
+
+        const get_7tv_emotes = async user_id => {
+            const user = await (await fetch(`https://7tv.io/v3/users/twitch/${user_id}`)).json()
+            const global = await (await fetch('https://7tv.io/v3/emote-sets/global')).json()
+
+            if ('emote_set' in user) user.emote_set?.emotes?.forEach(add_7tv_emote)
+            global?.emotes?.forEach(add_7tv_emote)
+
+            if ('emote_set_id' in user) return user.emote_set_id
+        }
+
+        const event_emotes = emote_set_id => {
+            sse?.close()
+            sse = new EventSource(`https://events.7tv.io/v3@emote_set.update<object_id=${emote_set_id}>`)
+            sse.addEventListener('dispatch', e => {
+                const o = JSON.parse(e.data)
+                o?.body?.pushed?.forEach(e => {
+                    emotes_7tv.set(e.value.name, e.value.id)
+                    if ((e.value?.data?.flags & 256) != 0) zero_width.push(e.value.id)
+                })
+                o?.body?.pulled?.forEach(e => emotes_7tv.delete(e.old_value.name))
+            })
+            sse.addEventListener('end_of_stream', e => {
+                const {code, message} = JSON.parse(e.data)
+                if ([4000, 4006, 4007, 4008].includes(code)) {
+                    const time = Math.random() * 1000 + (code === 4007 ? 300000 : 0)
+                    setTimeout(() => event_emotes(emote_set_id), time)
+                }
+            })
+        }
+
+        const get_badges = async token => {
+            const global = await (await fetch('https://api.twitch.tv/helix/chat/badges/global', {
+                headers: {'Authorization': `Bearer ${token.access_token}`, 'Client-Id': client_id}
+            })).json()
+            const channel = await (await fetch(`https://api.twitch.tv/helix/chat/badges?broadcaster_id=${token.user_id}`, {
+                headers: {'Authorization': `Bearer ${token.access_token}`, 'Client-Id': client_id}
+            })).json()
+
+            for (const data of [global, channel]) {
+                for (const set of data.data) {
+                    set.versions.forEach(v => {
+                        const id = v.image_url_1x.split('/').reverse()[1]
+                        all_badges.set(`${set.set_id}/${v.id}`, id)
+                    })
+                }
+            }
+        }
+
+        const emote = (id, fun) => {
+            const img = document.createElement('img')
+            img.className = 'emote'
+            img.src = fun(id, 1)
+            img.srcset = `${fun(id, 2)} 2x, ${fun(id, 4)} 4x`
+            if (zero_width.includes(id)) img.classList.add('zero')
+            return img
+        }
+
+        const twitch_url = (id, size) => `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/${Math.min(size, 3)}.0`
+        const seventv_url = (id, size) => `https://cdn.7tv.app/emote/${id}/${size}x.avif`
+
+        const next_sibling = node => {
+            do node = node.nextSibling
+            while (node?.nodeType === Node.TEXT_NODE && /^\s*$/.test(node.textContent))
+
+            return node
+        }
+
+        const collect = (node, group = []) => {
+            if (!node || node.tagName !== 'IMG' || (group.length && !node.classList.contains('zero')))
+                return [group, node]
+
+            return collect(next_sibling(node), [...group, node])
+        }
+
+        const wrap_zeros = (fragment, node = fragment.firstChild) => {
+            while (node && node.tagName !== 'IMG') node = next_sibling(node)
+
+            if (!node) return fragment
+
+            const [group, next] = collect(node)
+
+            if (group.length > 1 || group[0].classList.contains('zero')) {
+                const span = document.createElement('span')
+                span.className = 'emote-group'
+                group[0].before(span)
+                span.append(...group)
+            }
+
+            return wrap_zeros(fragment, next)
+        }
+
+        const render_message = (message, tags) => {
+            const emotes_twitch = new Map()
+            if (tags.emotes) {
+                for (const emote of tags.emotes.split('/')) {
+                    const [id, positions] = emote.split(':')
+                    const [start, end] = positions.split(',')[0].split('-').map(Number)
+                    const name = message.slice(start, end + 1)
+                    emotes_twitch.set(name, id)
+                }
+            }
+
+            const fragment = document.createDocumentFragment()
+            for (const part of message.split(/(\s+)/)) {
+                if (emotes_7tv.has(part)) {
+                    fragment.appendChild(emote(emotes_7tv.get(part), seventv_url))
+                } else if (emotes_twitch.has(part)) {
+                    fragment.appendChild(emote(emotes_twitch.get(part), twitch_url))
+                } else {
+                    fragment.appendChild(document.createTextNode(part))
+                }
+            }
+            return wrap_zeros(fragment)
+        }
+
+        const badge = id => {
+            const img = document.createElement('img')
+            img.className = 'badge'
+            img.src = `https://static-cdn.jtvnw.net/badges/v1/${id}/3`
+            return img
+        }
+
+        const render_badges = badges => {
+            const fragment = document.createDocumentFragment()
+            if (badges) {
+                for (const item of badges.split(',')) {
+                    if (all_badges.has(item)) fragment.appendChild(badge(all_badges.get(item)))
+                }
+            }
+            return fragment
+        }
+
+        const decode_tag = value => value
+            .replace(/\\s/g, ' ')
+            .replace(/\\:/g, ';')
+            .replace(/\\\\/g, '\\')
+            .replace(/\\r/g, '\r')
+            .replace(/\\n/g, '\n')
+
+        const parse_tags = raw => {
+            return Object.fromEntries(
+                raw.split(';').map(part => {
+                    const idx = part.indexOf('=')
+                    if (idx === -1) {return [part, true]}
+                    return [part.slice(0, idx), decode_tag(part.slice(idx + 1))]
+                })
+            )
+        }
+
+        const get_default_color = name =>
+            colors[[...name].reduce((sum, c) => sum + c.charCodeAt(0), 0) % colors.length]
+
+        const process_chat = (tags, message) => {
+            const el = document.createElement('div')
+            el.className = 'chat_message'
+            if (tags.badges.includes('bot-badge/1')) el.toggleAttribute('bot', true)
+            if (tags.mod === '1') el.toggleAttribute('data-mod', true)
+            if (tags.subscriber === '1') el.toggleAttribute('data-subscriber', true)
+            if (tags['first-msg'] === '1') el.toggleAttribute('data-first-msg', true)
+            if (tags['returning-chatter'] === '1') el.toggleAttribute('data-returning', true)
+            if (tags['reply-parent-msg-body'])
+                el.dataset.replymsg = tags['reply-parent-msg-body']
+            if (tags['reply-parent-display-name'])
+                el.dataset.replyname = tags['reply-parent-display-name']
+
+            const badges = document.createElement('span')
+            badges.appendChild(render_badges(tags.badges))
+            badges.className = 'badges'
+
+            const name = document.createElement('span')
+            name.textContent = tags['display-name']
+            name.className = 'username'
+            name.style.color = tags.color || get_default_color(tags['display-name'])
+
+            const colon = document.createElement('span')
+            colon.textContent = ':'
+            colon.className = 'colon'
+
+            const text = document.createElement('span')
+            text.appendChild(render_message(message, tags))
+            text.className = 'message'
+
+            el.appendChild(badges)
+            el.appendChild(name)
+            el.appendChild(colon)
+            el.appendChild(text)
+
+            insert_message(el)
+        }
+
+        const connect = channel => {
+            console.log('Connecting')
+            const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443')
+
+            ws.addEventListener('open', () => {
+                ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership')
+                ws.send('PASS SCHMOOPIIE')
+                ws.send('NICK justinfan12345')
+                ws.send(`JOIN #${channel}`)
+                console.log('Connected')
+            })
+
+            ws.addEventListener('message', event => {
+                const lines = event.data.split('\r\n')
+
+                for (const line of lines) {
+                    if (line.startsWith('PING')) {
+                        ws.send(line.replace('PING', 'PONG'))
+                        continue
+                    }
+
+                    const match = line.match(/^@(.+?) :[^ ]+?!.+ PRIVMSG #[^ ]+? :(.*)$/)
+
+                    if (match) {
+                        const [, tags, message] = match
+                        process_chat(parse_tags(tags), message)
+                    }
+                }
+            })
+        }
+
+        const seventv = async user_id => {
+            try {
+                const emote_set_id = await get_7tv_emotes(user_id)
+                event_emotes(emote_set_id)
+            } catch (e) {
+                console.error(`Failed to get 7tv emotes: ${e}`)
+                setTimeout(() => seventv(user_id), 60 * 1000)
+            }
+        }
+
+        (async () => {
+            const token = await get_token()
+            await get_badges(token)
+            await seventv(token.user_id)
+            connect(token.login)
+        })()
+    </script>
+</body>
+
+</html>
