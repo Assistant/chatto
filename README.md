@@ -4,3 +4,6 @@ Download `chatto.html` and use it with an OBS browser source, either by checking
 You will need to authenticate with Twitch, navigate to [twitch.tv/activate](https://twitch.tv/activate) and enter the code shown in the OBS browser source.
 
 Style with CSS as desired in the OBS browser source `Custom CSS` option.
+
+### Options
+You can enable messages disappearing after `n` seconds by appending `?timeout=n` to the URL.
