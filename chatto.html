@@ -248,10 +248,14 @@
             const user = await (await fetch(`https://7tv.io/v3/users/twitch/${user_id}`)).json()
             const global = await (await fetch('https://7tv.io/v3/emote-sets/global')).json()
 
-            if ('emote_set' in user) user.emote_set?.emotes?.forEach(add_7tv_emote)
             global?.emotes?.forEach(add_7tv_emote)
 
-            if ('emote_set_id' in user) return user.emote_set_id
+            if ('emote_set_id' in user) {
+                const emotes = await (await fetch(`https://7tv.io/v3/emote-sets/${user.emote_set_id}`)).json()
+                emotes?.emotes.forEach(add_7tv_emote)
+
+                return user.emote_set_id
+            }
         }
 
         const event_emotes = emote_set_id => {
