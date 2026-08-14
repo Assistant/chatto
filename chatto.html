@@ -413,6 +413,12 @@
             if (tags['reply-parent-display-name'])
                 el.dataset.replyname = tags['reply-parent-display-name']
 
+            const action = message.match(/^\u0001ACTION (.*)\u0001$/s);
+            if (action) {
+                message = action[1]
+                el.toggleAttribute('data-action', true)
+            }
+
             const badges = document.createElement('span')
             badges.appendChild(render_badges(tags.badges))
             badges.className = 'badges'
