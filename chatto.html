@@ -465,7 +465,7 @@
                         continue
                     }
 
-                    const match = line.match(/^@(.+?) :[^ ]+?!.+ PRIVMSG #[^ ]+? :(.*)$/)
+                    const match = line.match(/^@(.+?) :[^ ]+ (?:PRIVMSG|USERNOTICE) #[^ ]+? :(.*)$/)
 
                     if (match) {
                         const [, tags, message] = match
